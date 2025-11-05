@@ -1,0 +1,92 @@
+export interface StaffProfile {
+  id: string;
+  name: string;
+  email: string;
+  department: string;
+  shortName: string;
+  description: string;
+  subjects: string[];
+  avatar: string;
+}
+
+export type DayOfWeek = "Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday" | "Saturday";
+
+export type ActivityType = "Teaching" | "Office Hours" | "Meeting" | "Lab Session" | "Consultation" | "Free" | "Busy" | "Team Standup" | "Client Review" | "Sprint Planning" | "Team Lunch";
+
+export interface TimetableEntry {
+  id: string;
+  day: DayOfWeek;
+  timeSlot: { start: string; end: string };
+  activity: ActivityType;
+  subject?: string;
+  room?: string;
+  batch?: string;
+  notes?: string;
+  isRecurring?: boolean;
+}
+
+export interface Appointment {
+  id: string;
+  clientName: string;
+  purpose: string;
+  date: string;
+  time: string;
+  status: "Pending" | "Confirmed" | "Rejected";
+}
+
+export interface CallLog {
+    id: string;
+    clientName: string;
+    duration: string;
+    status: 'completed' | 'missed' | 'rejected';
+    timestamp: string;
+}
+
+export interface CallUpdate {
+    id: string;
+    clientName: string;
+    purpose: string;
+}
+
+export interface Task {
+  id: string;
+  title: string;
+  description: string;
+  dueDate: string;
+  priority: 'High' | 'Medium' | 'Low' | 'None';
+  status: 'To Do' | 'In Progress' | 'Done';
+}
+
+export type NavItem = "Dashboard" | "Timetable" | "Appointments" | "Task Management" | "AI Assistant" | "Meeting Summarizer" | "Team Directory" | "Settings";
+
+export interface Meeting {
+  id: string;
+  title: string;
+  date: string;
+  time: string;
+  location: string;
+  attendees: string[]; // array of staff IDs
+}
+
+export interface ChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  timestamp: string;
+  fileName?: string;
+}
+
+export interface Group {
+  id: string;
+  name: string;
+  members: string[]; // array of staff IDs
+  messages: ChatMessage[];
+}
+
+export interface Notification {
+  id: number;
+  type: 'message' | 'meeting' | 'system';
+  title: string;
+  message: string;
+}
