@@ -51,7 +51,7 @@ export class CallService {
   private ensureSocket() {
     if (!this.socket) {
       const socketUrl = this.apiBase.replace(/\/api$/, '');
-      this.socket = io(socketUrl, {
+      this.socket = io(`${socketUrl}/rtc`, {
         path: SOCKET_PATH,
         auth: { token: this.token },
       });

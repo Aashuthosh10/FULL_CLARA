@@ -178,8 +178,9 @@ const PreChatModal = ({ onStart }) => {
     );
 };
 
-const VideoCallView = ({ staff, onEndCall }) => {
+const VideoCallView = ({ staff, onEndCall, activeCall }) => {
     const userVideoRef = useRef(null);
+    const staffVideoRef = useRef(null);
     const streamRef = useRef(null);
     const animationFrameRef = useRef(null);
     const audioContextRef = useRef(null);
@@ -201,20 +202,36 @@ const VideoCallView = ({ staff, onEndCall }) => {
         }
     }, [countdown]);
     
-    // Simulated staff speaking effect
+    // Watch for remote stream and update staff video
     useEffect(() => {
-        if (!isConnected) return;
+        if (activeCall?.remoteStream && staffVideoRef.current) {
+            staffVideoRef.current.srcObject = activeCall.remoteStream;
+            setIsConnected(true);
+        }
+    }, [activeCall?.remoteStream]);
+
+    // Simulated staff speaking effect (only if no remote stream)
+    useEffect(() => {
+        if (!isConnected || activeCall?.remoteStream) return;
         const interval = setInterval(() => {
             setIsStaffSpeaking(prev => Math.random() > 0.5 ? !prev : prev);
         }, 1200);
         return () => clearInterval(interval);
-    }, [isConnected]);
+    }, [isConnected, activeCall?.remoteStream]);
 
     useEffect(() => {
         const startCameraAndAudio = async () => {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                streamRef.current = stream;
+                // Use activeCall's local stream if available, otherwise get new stream
+                let stream: MediaStream;
+                if (activeCall?.localStream) {
+                    stream = activeCall.localStream;
+                    streamRef.current = stream;
+                } else {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    streamRef.current = stream;
+                }
+                
                 if (userVideoRef.current) {
                     userVideoRef.current.srcObject = stream;
                 }
@@ -247,6 +264,8 @@ const VideoCallView = ({ staff, onEndCall }) => {
                 };
                 checkSpeaking();
 
+                // Remote stream handling is done in separate useEffect above
+
             } catch (err) {
                 console.error("Error accessing camera/mic:", err);
                 alert("Could not access your camera or microphone. Please check permissions and try again.");
@@ -258,14 +277,15 @@ const VideoCallView = ({ staff, onEndCall }) => {
 
         return () => {
             cancelAnimationFrame(animationFrameRef.current);
-            if (streamRef.current) {
+            // Don't stop tracks if they're from activeCall (will be cleaned up by CallService)
+            if (streamRef.current && !activeCall?.localStream) {
                 streamRef.current.getTracks().forEach(track => track.stop());
             }
             if (audioContextRef.current) {
                 audioContextRef.current.close().catch(console.error);
             }
         };
-    }, [onEndCall]);
+    }, [onEndCall, activeCall]);
 
     const toggleMic = () => {
         if (streamRef.current) {
@@ -295,9 +315,13 @@ const VideoCallView = ({ staff, onEndCall }) => {
                 </div>
             )}
             <div className="staff-video-view">
-                <div className={`staff-avatar-placeholder ${isStaffSpeaking && isConnected ? 'speaking' : ''}`}>
-                    <StaffLoginIcon size={80} />
-                </div>
+                {activeCall?.remoteStream ? (
+                    <video ref={staffVideoRef} autoPlay playsInline className="staff-video"></video>
+                ) : (
+                    <div className={`staff-avatar-placeholder ${isStaffSpeaking && isConnected ? 'speaking' : ''}`}>
+                        <StaffLoginIcon size={80} />
+                    </div>
+                )}
                 <h2>{staff.name}</h2>
                 <p>{isConnected ? 'Connected' : 'Connecting...'}</p>
                  <div className="video-call-branding">
@@ -339,6 +363,7 @@ const App = () => {
     const [videoCallTarget, setVideoCallTarget] = useState(null);
     const [unifiedCallService, setUnifiedCallService] = useState<CallService | null>(null);
     const [isUnifiedCalling, setIsUnifiedCalling] = useState(false);
+    const [activeCall, setActiveCall] = useState<{ callId: string; pc: RTCPeerConnection; localStream: MediaStream; remoteStream: MediaStream | null } | null>(null);
     
     const sessionPromiseRef = useRef(null);
     const inputAudioContextRef = useRef(null);
@@ -448,21 +473,70 @@ const App = () => {
                         const { staffShortName } = fc.args;
                         const staffToCall = staffList.find(s => s.shortName === staffShortName);
                         
-                        if (staffToCall) {
+                        if (staffToCall && unifiedCallService) {
                             const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                             setMessages(prev => [...prev, { sender: 'clara', text: `Initiating video call with ${staffToCall.name}...`, isFinal: true, timestamp }]);
                             stopRecording(true);
-                            setVideoCallTarget(staffToCall);
-                            setView('video_call');
+                            
+                            // Actually start the WebRTC call
+                            unifiedCallService.startCall({
+                                targetStaffId: staffToCall.shortName, // Use shortName as staffId
+                                purpose: 'Voice-initiated video call',
+                                onAccepted: (callId, pc, remoteStream) => {
+                                    console.log('Call accepted:', callId);
+                                    // Update activeCall with remote stream
+                                    setActiveCall(prev => prev ? {
+                                        ...prev,
+                                        remoteStream,
+                                    } : null);
+                                    
+                                    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                    setMessages(prev => [...prev, { sender: 'clara', text: `Video call with ${staffToCall.name} connected!`, isFinal: true, timestamp }]);
+                                },
+                                onDeclined: (reason) => {
+                                    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                    setMessages(prev => [...prev, { sender: 'clara', text: `Call declined${reason ? ': ' + reason : ''}.`, isFinal: true, timestamp }]);
+                                    setView('chat');
+                                },
+                                onError: (error) => {
+                                    console.error('Call error:', error);
+                                    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                    setMessages(prev => [...prev, { sender: 'clara', text: `Failed to start call: ${error.message}`, isFinal: true, timestamp }]);
+                                    setView('chat');
+                                }
+                            }).then((result) => {
+                                if (result) {
+                                    // Store local stream from result immediately
+                                    const callState = {
+                                        callId: result.callId,
+                                        pc: result.pc,
+                                        localStream: result.stream,
+                                        remoteStream: null as MediaStream | null,
+                                    };
+                                    setActiveCall(callState);
+                                    setVideoCallTarget(staffToCall);
+                                    setView('video_call');
+                                } else {
+                                    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                    setMessages(prev => [...prev, { sender: 'clara', text: 'Failed to start call. Please try again.', isFinal: true, timestamp }]);
+                                }
+                            }).catch((error) => {
+                                console.error('Call initiation error:', error);
+                                const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                setMessages(prev => [...prev, { sender: 'clara', text: `Failed to start call: ${error.message}`, isFinal: true, timestamp }]);
+                            });
 
                             sessionPromiseRef.current.then((session) => {
                                 session.sendToolResponse({
                                     functionResponses: { id: fc.id, name: fc.name, response: { result: "Video call initiated successfully." } }
                                 })
-                            });
+                            }).catch(console.error);
                         } else {
                             const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                            setMessages(prev => [...prev, { sender: 'clara', text: `Sorry, I couldn't find a staff member with the ID "${staffShortName}".`, isFinal: true, timestamp }]);
+                            const errorMsg = !staffToCall 
+                                ? `Sorry, I couldn't find a staff member with the ID "${staffShortName}".` 
+                                : 'Video calling is not available. Please enable unified mode.';
+                            setMessages(prev => [...prev, { sender: 'clara', text: errorMsg, isFinal: true, timestamp }]);
                         }
                     }
                 }
@@ -752,7 +826,15 @@ You are CLARA, the official, friendly, and professional AI receptionist for Sai 
 
     const handleEndCall = () => {
         const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        setMessages(prev => [...prev, { sender: 'clara', text: `Video call with ${videoCallTarget.name} ended.`, isFinal: true, timestamp }]);
+        const staffName = videoCallTarget?.name || 'Staff';
+        setMessages(prev => [...prev, { sender: 'clara', text: `Video call with ${staffName} ended.`, isFinal: true, timestamp }]);
+        
+        // Cleanup active call
+        if (activeCall && unifiedCallService) {
+            unifiedCallService.endCall(activeCall.callId);
+        }
+        
+        setActiveCall(null);
         setView('chat');
         setVideoCallTarget(null);
     };
@@ -847,7 +929,7 @@ You are CLARA, the official, friendly, and professional AI receptionist for Sai 
             return <PreChatModal onStart={handleStartConversation} />;
         }
         if (view === 'video_call' && videoCallTarget) {
-            return <VideoCallView staff={videoCallTarget} onEndCall={handleEndCall} />;
+            return <VideoCallView staff={videoCallTarget} onEndCall={handleEndCall} activeCall={activeCall} />;
         }
         return (
             <div className="app-container">

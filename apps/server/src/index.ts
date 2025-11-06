@@ -95,6 +95,33 @@ io.of(NAMESPACE).use((socket, next) => {
 // Initialize repository
 const callRepo = new CallRepository();
 
+// Helper function to create complete StaffProfile objects
+function createStaffProfile(email: string, dept?: string): {
+  id: string;
+  name: string;
+  email: string;
+  department: string;
+  shortName: string;
+  description: string;
+  subjects: string[];
+  avatar: string;
+} {
+  const name = email.split('@')[0];
+  const capitalizedName = name.charAt(0).toUpperCase() + name.slice(1);
+  const shortName = name.toLowerCase();
+  
+  return {
+    id: email,
+    name: capitalizedName,
+    email: email,
+    department: dept || 'general',
+    shortName: shortName,
+    description: `Staff member in ${dept || 'general'} department`,
+    subjects: [],
+    avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(capitalizedName)}&background=6366f1&color=fff&size=128`,
+  };
+}
+
 // Rate limiting
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -147,12 +174,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     return res.json({ 
       token, 
       refreshToken,
-      user: {
-        id: userId,
-        email: email,
-        name: email.split('@')[0],
-        role: 'staff'
-      }
+      user: createStaffProfile(email, 'general')
     });
   }
   
@@ -195,14 +217,16 @@ app.post('/api/auth/logout', authMiddleware, (_req, res) => {
 // Mock user data endpoint for staff app
 app.get('/api/user/:username', authMiddleware, async (req: Request & { user?: AuthPayload }, res) => {
   const { username } = req.params;
-  // Return mock user data - in production, fetch from database
+  // Prioritize JWT user ID (which contains the email) if available
+  // Otherwise, reconstruct email from username parameter
+  const email = req.user?.userId?.includes('@') 
+    ? req.user.userId 
+    : (username.includes('@') ? username : `${username}@example.com`);
+  const dept = req.user?.dept || 'general';
+  
+  // Return complete StaffProfile matching the Staff app's expected structure
   res.json({
-    user: {
-      id: req.user?.userId || username,
-      email: username.includes('@') ? username : `${username}@example.com`,
-      name: username.split('@')[0],
-      department: req.user?.dept || 'general',
-    },
+    user: createStaffProfile(email, dept),
     meetings: [],
     tasks: [],
     timetable: [],
@@ -374,13 +398,11 @@ if (ENABLE_UNIFIED) {
       target: 'http://localhost:5173',
       changeOrigin: true,
       ws: true,
-      logLevel: 'warn',
     }));
     app.use(staffPath, createProxyMiddleware({
       target: 'http://localhost:5174',
       changeOrigin: true,
       ws: true,
-      logLevel: 'warn',
     }));
   } else {
     // Prod: Serve static builds
